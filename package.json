@@ -4,10 +4,6 @@
   "repository": "git@github.com:gatsby-uc/plugins.git",
   "license": "MIT",
   "private": true,
-  "workspaces": [
-    "packages/*",
-    "integration-tests/*"
-  ],
   "scripts": {
     "ac": "yarn all-contributors",
     "build": "yarn workspaces foreach -vpi --no-private run build",
