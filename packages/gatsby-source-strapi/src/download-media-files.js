@@ -3,6 +3,9 @@ import qs from "qs";
 import { createRemoteFileNode } from "gatsby-source-filesystem";
 import { getContentTypeSchema } from "./helpers";
 
+/* // console.log("🦄");
+// console.log(getContentTypeSchema) */
+
 const reader = new Parser();
 
 /**
@@ -12,7 +15,7 @@ const reader = new Parser();
  * @returns {Object[]}
  */
 const extractFiles = (text, apiURL) => {
-  const files = [];
+  const StrapiFiles = [];
   // parse the markdown content
   const parsed = reader.parse(text);
   const walker = parsed.walker();
@@ -32,21 +35,21 @@ const extractFiles = (text, apiURL) => {
       }
 
       if (destination) {
-        files.push({ url: destination, src: node.destination, alternativeText });
+        StrapiFiles.push({ url: destination, src: node.destination, alternativeText });
       }
     }
   }
 
-  return files.filter(Boolean);
+  return StrapiFiles.filter(Boolean);
 };
 
 /**
  * Download file and create node
- * @param {Object} file
+ * @param {Object} strapiFile
  * @param {Object} ctx
  * @returns {String} node Id
  */
-export const downloadFile = async (file, context) => {
+export const downloadStrapiFile = async (strapiFile, context) => {
   const {
     actions: { createNode, touchNode },
     cache,
@@ -57,23 +60,23 @@ export const downloadFile = async (file, context) => {
   } = context;
   const { apiURL, remoteFileHeaders } = strapiConfig;
 
-  let fileNodeID;
+  let strapiFileNodeID;
 
-  const mediaDataCacheKey = `strapi-media-${file.id}`;
+  const mediaDataCacheKey = `strapi-media-${strapiFile.id}`;
   const cacheMediaData = await cache.get(mediaDataCacheKey);
 
   // If we have cached media data and it wasn't modified, reuse
   // previously created file node to not try to redownload
-  if (cacheMediaData && cacheMediaData.updatedAt === file.updatedAt) {
-    fileNodeID = cacheMediaData.fileNodeID;
-    touchNode(getNode(fileNodeID));
+  if (cacheMediaData && cacheMediaData.updatedAt === strapiFile.updatedAt) {
+    strapiFileNodeID = cacheMediaData.fileNodeID;
+    touchNode(getNode(strapiFileNodeID));
   }
 
-  if (!fileNodeID) {
+  if (!strapiFileNodeID) {
     try {
       // full media url
-      const source_url = `${file.url.startsWith("http") ? "" : apiURL}${file.url}`;
-      const fileNode = await createRemoteFileNode({
+      const source_url = `${strapiFile.url.startsWith("http") ? "" : apiURL}${strapiFile.url}`;
+      const strapiFileNode = await createRemoteFileNode({
         url: source_url,
         store,
         cache,
@@ -82,12 +85,17 @@ export const downloadFile = async (file, context) => {
         httpHeaders: remoteFileHeaders || {},
       });
 
-      if (fileNode) {
-        fileNodeID = fileNode.id;
+      // console.log("strapiFileNode", strapiFileNode);
+
+      if (strapiFileNode) {
+        strapiFileNodeID = strapiFileNode.id;
+
+        // console.log("strapiFileNodeID", strapiFileNodeID);
+        // strapiFileNodeID = strapiFileNode.id + "strapi"; // this breaks things
 
         await cache.set(mediaDataCacheKey, {
-          fileNodeID,
-          updatedAt: file.updatedAt,
+          fileNodeID: strapiFileNodeID,
+          updatedAt: strapiFile.updatedAt,
         });
       }
     } catch (error) {
@@ -96,33 +104,44 @@ export const downloadFile = async (file, context) => {
     }
   }
 
-  return fileNodeID;
+  // console.log(strapiFileNodeID);
+  return strapiFileNodeID;
+
 };
 
 /**
  * Extract images and create remote nodes for images in all fields.
  * @param {Object} item the entity
- * @param {Object} context gatsby function
+ * @param {Object} strapiContext gatsby function
  * @param {String} uid the main schema uid
  */
-const extractImages = async (item, context, uid) => {
-  const { schemas, strapiConfig, axiosInstance } = context;
+const extractImages = async (item, strapiContext, uid) => {
+  const { schemas, strapiConfig, axiosInstance } = strapiContext;
+
+  // console.log(strapiContext);
+
   const schema = getContentTypeSchema(schemas, uid);
   const { apiURL } = strapiConfig;
 
-  for (const attributeName of Object.keys(item)) {
-    const value = item[attributeName];
+  // console.log(schema);
 
-    const attribute = schema.schema.attributes[attributeName];
+  for (const strapiAttributeName of Object.keys(item)) {
+    const strapiValue = item[strapiAttributeName];
+
+    // console.log("value", value);
+
+    const attribute = schema.schema.attributes[strapiAttributeName];
+
+    // console.log("attribute", attribute);
 
     const type = attribute?.type || undefined;
 
-    if (value && type) {
+    if (strapiValue && type) {
       if (type === "richtext") {
-        const extractedFiles = extractFiles(value.data, apiURL);
+        const extractedStrapiFiles = extractFiles(strapiValue.data, apiURL);
 
-        const files = await Promise.all(
-          extractedFiles.map(async ({ url }) => {
+        const strapiFiles = await Promise.all(
+          extractedStrapiFiles.map(async ({ url }) => {
             const filters = qs.stringify(
               {
                 filters: { url: url.replace(`${apiURL}`, "") },
@@ -130,74 +149,78 @@ const extractImages = async (item, context, uid) => {
               { encode: false }
             );
 
-            const { data } = await axiosInstance.get(`/api/upload/files?${filters}`);
-            const file = data[0];
+            const { data } = await axiosInstance.get(`/api/upload/strapi-files?${filters}`);
+            const strapiFile = data[0];
 
-            if (!file) {
+            if (!strapiFile) {
               return;
             }
 
-            const fileNodeID = await downloadFile(file, context);
+            const strapiFileNodeID = await downloadStrapiFile(strapiFile, strapiContext);
 
-            return { fileNodeID, file };
+            return { strapiFileNodeID: strapiFileNodeID, strapiFile: strapiFile };
           })
         );
 
-        const fileNodes = files.filter(Boolean);
+        const strapiFileNodes = strapiFiles.filter(Boolean);
 
-        for (const [index, fileNode] of fileNodes.entries()) {
-          item[attributeName].medias.push({
-            alternativeText: extractedFiles[index].alternativeText,
-            url: extractedFiles[index].url,
-            src: extractedFiles[index].src,
-            localFile___NODE: fileNode.fileNodeID,
-            file: fileNode.file,
+        for (const [index, strapiFileNode] of strapiFileNodes.entries()) {
+          item[strapiAttributeName].medias.push({
+            alternativeText: extractedStrapiFiles[index].alternativeText,
+            url: extractedStrapiFiles[index].url,
+            src: extractedStrapiFiles[index].src,
+            strapiLocalFile___NODE: strapiFileNode.strapiFileNodeID,
+            StrapiFile: strapiFileNode.strapiFile,
           });
+
+          // console.log("item", item);
         }
       }
 
       if (type === "dynamiczone") {
-        for (const element of value) {
-          await extractImages(element, context, element.strapi_component);
+        for (const element of strapiValue) {
+          await extractImages(element, strapiContext, element.strapi_component);
         }
       }
 
       if (type === "component") {
         if (attribute.repeatable) {
-          for (const element of value) {
-            await extractImages(element, context, attribute.component);
+          for (const element of strapiValue) {
+            await extractImages(element, strapiContext, attribute.component);
           }
         } else {
-          await extractImages(value, context, attribute.component);
+          await extractImages(strapiValue, strapiContext, attribute.component);
         }
       }
 
       if (type === "relation") {
-        await extractImages(value, context, attribute.target);
+        await extractImages(strapiValue, strapiContext, attribute.target);
       }
 
       if (type === "media") {
         const isMultiple = attribute.multiple;
-        const imagesField = isMultiple ? value : [value];
+        const imagesField = isMultiple ? strapiValue : [strapiValue];
 
         // Dowload all files
-        const files = await Promise.all(
-          imagesField.map(async (file) => {
-            const fileNodeID = await downloadFile(file, context);
+        const strapiFiles = await Promise.all(
+          imagesField.map(async (strapiFile) => {
+            const strapiFileNodeID = await downloadStrapiFile(strapiFile, strapiContext);
 
-            return fileNodeID;
+            // console.log("strapiFileNodeID", strapiFileNodeID);
+
+            return strapiFileNodeID;
           })
         );
 
-        const images = files.filter(Boolean);
+        const strapiImages = strapiFiles.filter(Boolean);
 
-        if (images && images.length > 0) {
+        if (strapiImages && strapiImages.length > 0) {
           if (isMultiple) {
-            for (let index = 0; index < value.length; index++) {
-              item[attributeName][index][`localFile___NODE`] = images[index];
+            for (let index = 0; index < strapiValue.length; index++) {
+              item[strapiAttributeName][index][`localFile___NODE`] = strapiImages[index];
             }
           } else {
-            item[attributeName][`localFile___NODE`] = isMultiple ? images : images[0];
+            item[strapiAttributeName][`localFile___NODE`] = isMultiple ? strapiImages : strapiImages[0];
           }
         }
       }
@@ -210,7 +233,8 @@ export const downloadMediaFiles = async (entities, context, contentTypeUid) =>
   Promise.all(
     entities.map(async (entity) => {
       await extractImages(entity, context, contentTypeUid);
-
+      // console.log("entity", entity);
+      // console.log("context", context);
       return entity;
     })
   );
